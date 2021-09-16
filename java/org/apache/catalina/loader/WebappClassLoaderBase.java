@@ -16,6 +16,18 @@
  */
 package org.apache.catalina.loader;
 
+import org.apache.catalina.*;
+import org.apache.catalina.webresources.TomcatURLStreamHandlerFactory;
+import org.apache.juli.WebappProperties;
+import org.apache.juli.logging.Log;
+import org.apache.juli.logging.LogFactory;
+import org.apache.tomcat.InstrumentableClassLoader;
+import org.apache.tomcat.util.ExceptionUtils;
+import org.apache.tomcat.util.IntrospectionUtils;
+import org.apache.tomcat.util.compat.JreCompat;
+import org.apache.tomcat.util.res.StringManager;
+import org.apache.tomcat.util.security.PermissionCheck;
+
 import java.io.File;
 import java.io.FilePermission;
 import java.io.IOException;
@@ -29,54 +41,16 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.security.AccessControlException;
-import java.security.AccessController;
-import java.security.CodeSource;
-import java.security.Permission;
-import java.security.PermissionCollection;
-import java.security.Policy;
-import java.security.PrivilegedAction;
-import java.security.ProtectionDomain;
+import java.security.*;
 import java.security.cert.Certificate;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.ConcurrentModificationException;
-import java.util.Date;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.jar.Attributes;
 import java.util.jar.Attributes.Name;
 import java.util.jar.Manifest;
-
-import org.apache.catalina.Container;
-import org.apache.catalina.Globals;
-import org.apache.catalina.Lifecycle;
-import org.apache.catalina.LifecycleException;
-import org.apache.catalina.LifecycleListener;
-import org.apache.catalina.LifecycleState;
-import org.apache.catalina.WebResource;
-import org.apache.catalina.WebResourceRoot;
-import org.apache.catalina.webresources.TomcatURLStreamHandlerFactory;
-import org.apache.juli.WebappProperties;
-import org.apache.juli.logging.Log;
-import org.apache.juli.logging.LogFactory;
-import org.apache.tomcat.InstrumentableClassLoader;
-import org.apache.tomcat.util.ExceptionUtils;
-import org.apache.tomcat.util.IntrospectionUtils;
-import org.apache.tomcat.util.compat.JreCompat;
-import org.apache.tomcat.util.res.StringManager;
-import org.apache.tomcat.util.security.PermissionCheck;
 
 /**
  * Specialized web application class loader.
@@ -1224,6 +1198,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
             // Log access to stopped class loader
             checkStateForClassLoading(name);
 
+            //1. 先在本地cache查找该类是否已经加载过
             // (0) Check our previously loaded local class cache
             clazz = findLoadedClass0(name);
             if (clazz != null) {
@@ -1234,6 +1209,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
                 return clazz;
             }
 
+            //2. 从系统类加载器的cache中查找是否加载过
             // (0.1) Check our previously loaded class cache
             clazz = JreCompat.isGraalAvailable() ? null : findLoadedClass(name);
             if (clazz != null) {
@@ -1244,6 +1220,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
                 return clazz;
             }
 
+            // 3. 尝试⽤ExtClassLoader类加载器类加载(目的防止 Web 应用自己的类覆盖JRE的核心类)
             // (0.2) Try loading the class with the system class loader, to prevent
             //       the webapp from overriding Java SE classes. This implements
             //       SRV.10.7.2
@@ -1308,6 +1285,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
 
             boolean delegateLoad = delegate || filter(name, true);
 
+            // 4. 尝试⽤系统类加载器(也就是AppClassLoader)来加载
             // (1) Delegate to our parent if requested
             if (delegateLoad) {
                 if (log.isDebugEnabled())
@@ -1326,6 +1304,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
                 }
             }
 
+            // 5. 尝试在本地⽬录搜索class并加载
             // (2) Search local repositories
             if (log.isDebugEnabled())
                 log.debug("  Searching local repositories");
@@ -1342,6 +1321,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
                 // Ignore
             }
 
+            // 6. 无条件尝试⽤系统类加载器(也就是AppClassLoader)来加载
             // (3) Delegate to parent unconditionally
             if (!delegateLoad) {
                 if (log.isDebugEnabled())
@@ -1361,6 +1341,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
             }
         }
 
+        // 7. 上述过程都加载失败，抛出异常
         throw new ClassNotFoundException(name);
     }
 
